@@ -7,9 +7,11 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 
-const int32_t VIEW_WIDTH = 320;
-const int32_t VIEW_HEIGHT = 240;
-const int32_t VIEW_SCALE = 2;
+#include <immintrin.h>
+
+const int32_t VIEW_WIDTH = 1920;
+const int32_t VIEW_HEIGHT = 1080;
+const int32_t VIEW_SCALE = 1;
 const int32_t PIXEL_COUNT = VIEW_WIDTH * VIEW_HEIGHT;
 const int32_t PIXEL_COMPONENTS = 4;
 const int32_t PIXEL_STRIDE = VIEW_WIDTH * PIXEL_COMPONENTS;
@@ -21,9 +23,10 @@ struct Image
     SDL_Surface *surface;
 };
 
-inline uint32_t getImagePixel(const Image& image, int32_t x, int32_t y) {
+inline uint32_t getImagePixel(const Image &image, int32_t x, int32_t y)
+{
     auto width = image.surface->w;
-    auto pixels = reinterpret_cast<uint32_t*>(image.surface->pixels);
+    auto pixels = reinterpret_cast<uint32_t *>(image.surface->pixels);
     return pixels[x + y * width];
 }
 
@@ -35,7 +38,7 @@ inline void setPixel(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32
     pixels[i] = oldColor * !alpha + color * alpha;
 }
 
-void drawSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image& image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
+void drawSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
 {
     int32_t startX = std::max(x, 0);
     int32_t startY = std::max(y, 0);
@@ -45,17 +48,83 @@ void drawSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
     int32_t spanY = endY - startY;
     int32_t texStartX = texX + flipX * width;
     int32_t texStartY = texY + flipY * height;
-    int32_t texDirectionX = 2 * flipX + 1;
-    int32_t texDirectionY = 2 * flipY + 1;
+    int32_t texDirectionX = -(2 * flipX - 1);
+    int32_t texDirectionY = -(2 * flipY - 1);
 
     for (int32_t iy = 0; iy < spanY; iy++)
     {
         for (int32_t ix = 0; ix < spanX; ix++)
         {
             auto color = getImagePixel(image,
-                texStartX + texDirectionX * ix,
-                texStartY + texDirectionY * iy);
+                                       texStartX + texDirectionX * ix,
+                                       texStartY + texDirectionY * iy);
             setPixel(pixels, startX + ix, startY + iy, color);
+        }
+    }
+}
+
+void copySprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY)
+{
+    int32_t startX = std::max(x, 0);
+    int32_t startY = std::max(y, 0);
+    int32_t endX = std::min(x + width, VIEW_WIDTH);
+    int32_t endY = std::min(y + height, VIEW_HEIGHT);
+    int32_t spanX = endX - startX;
+    int32_t spanY = endY - startY;
+
+    auto srcPixels = reinterpret_cast<uint32_t *>(image.surface->pixels);
+
+    for (int32_t iy = 0; iy < spanY; iy++)
+    {
+        memcpy(&pixels[startX + (startY + iy) * VIEW_WIDTH], &srcPixels[texX + (texY + iy) * image.surface->w], spanX * sizeof(uint32_t));
+    }
+}
+
+const __m256i white256 = _mm256_set1_epi32(0x00ffffff);
+const __m256i zero256 = _mm256_set1_epi32(0);
+const __m256i alphaMask256 = _mm256_set1_epi32(0xff000000);
+
+void blitSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
+{
+    int32_t startX = std::max(x, 0);
+    int32_t startY = std::max(y, 0);
+    int32_t endX = std::min(x + width, VIEW_WIDTH);
+    int32_t endY = std::min(y + height, VIEW_HEIGHT);
+    int32_t spanX = endX - startX;
+    int32_t spanY = endY - startY;
+    int32_t texStartY = texY + flipY * height;
+    int32_t texDirectionY = -(2 * flipY - 1);
+
+    auto srcPixels = reinterpret_cast<uint32_t *>(image.surface->pixels);
+
+    for (int32_t iy = 0; iy < spanY; iy++)
+    {
+        for (int32_t ix = 0; ix < spanX; ix += 8)
+        {
+            // This method follows the bit blit algorithm: https://en.wikipedia.org/wiki/Bit_blit.
+            // The idea is to AND the desintation pixels with a black and white mask (black where
+            // the sprite should be opaque, white where the sprite should be transparent). Then
+            // OR the source pixels with the mask to get the correct values for each pixel.
+            // Some extra work is done here to create a mask on the fly based on the alpha of each
+            // pixel rather than a predefined black and white image.
+
+            // Destination pixel:
+            auto dst = _mm256_loadu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH]);
+            // Source pixel:
+            auto src = _mm256_loadu_epi32(&srcPixels[(texX + ix) + (texStartY + texDirectionY * iy) * image.surface->w]);
+
+            if (flipX)
+            {
+                // Reverse the source:
+                src = _mm256_shuffle_epi32(src, _MM_SHUFFLE(0, 1, 2, 3));
+                src = _mm256_permute2f128_si256(src, src, 1);
+            }
+
+            // Non transparent pixels (alpha == 0) get filled with black:
+            auto mask = _mm256_and_epi32(dst, _mm256_cmpeq_epi32(zero256, _mm256_and_epi32(src, alphaMask256)));
+            // Write the sprites actual pixels onto the masked pixels:
+            auto result = _mm256_or_epi32(src, mask);
+            _mm256_storeu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH], result);
         }
     }
 }
@@ -155,8 +224,8 @@ int main(int argc, char **argv)
         {
             for (int32_t x = 0; x < mapWidth; x++)
             {
-                drawSprite(pixels, x * 16, y * 16, 16, 16, image, 0, 0);
-                drawSprite(pixels, x * 16, y * 16, 16, 16, image, 0, 44);
+                copySprite(pixels, x * 16, y * 16, 16, 16, image, 0, 0);
+                blitSprite(pixels, x * 16, y * 16, 16, 16, image, 0, 40, false, false);
             }
         }
 
