@@ -80,9 +80,7 @@ void copySprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
     }
 }
 
-const __m256i white256 = _mm256_set1_epi32(0x00ffffff);
 const __m256i zero256 = _mm256_set1_epi32(0);
-const __m256i alphaMask256 = _mm256_set1_epi32(0xff000000);
 
 void blitSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
 {
@@ -102,11 +100,11 @@ void blitSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
         for (int32_t ix = 0; ix < spanX; ix += 8)
         {
             // This method follows the bit blit algorithm: https://en.wikipedia.org/wiki/Bit_blit.
-            // The idea is to AND the desintation pixels with a black and white mask (black where
+            // The idea is to AND the destination pixels with a black and white mask (black where
             // the sprite should be opaque, white where the sprite should be transparent). Then
             // OR the source pixels with the mask to get the correct values for each pixel.
-            // Some extra work is done here to create a mask on the fly based on the alpha of each
-            // pixel rather than a predefined black and white image.
+            // Some extra work is done by comparing the source pixel to zero in order to avoid
+            // creating a mask manually.
 
             // Destination pixel:
             auto dst = _mm256_loadu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH]);
@@ -121,7 +119,7 @@ void blitSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
             }
 
             // Non transparent pixels (alpha == 0) get filled with black:
-            auto mask = _mm256_and_epi32(dst, _mm256_cmpeq_epi32(zero256, _mm256_and_epi32(src, alphaMask256)));
+            auto mask = _mm256_and_epi32(dst, _mm256_cmpeq_epi32(zero256, src));
             // Write the sprites actual pixels onto the masked pixels:
             auto result = _mm256_or_epi32(src, mask);
             _mm256_storeu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH], result);
