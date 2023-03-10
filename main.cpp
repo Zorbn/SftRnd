@@ -9,9 +9,9 @@
 
 #include <immintrin.h>
 
-const int32_t VIEW_WIDTH = 1920;
-const int32_t VIEW_HEIGHT = 1080;
-const int32_t VIEW_SCALE = 1;
+const int32_t VIEW_WIDTH = 320;
+const int32_t VIEW_HEIGHT = 240;
+const int32_t VIEW_SCALE = 2;
 const int32_t PIXEL_COUNT = VIEW_WIDTH * VIEW_HEIGHT;
 const int32_t PIXEL_COMPONENTS = 4;
 const int32_t PIXEL_STRIDE = VIEW_WIDTH * PIXEL_COMPONENTS;
@@ -55,6 +55,7 @@ void copySprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
     }
 }
 
+#ifdef USE_AVX
 const __m256i zero8 = _mm256_set1_epi32(0);
 
 void blitSprite8(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
@@ -101,7 +102,9 @@ void blitSprite8(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y
         }
     }
 }
+#endif
 
+#ifdef USE_SSE
 const __m128i zero4 = _mm_set1_epi32(0);
 
 void blitSprite4(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
@@ -147,18 +150,23 @@ void blitSprite4(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y
         }
     }
 }
+#endif
 
 void drawSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
 {
+#ifdef USE_AVX
     if (width % 8 == 0) {
         blitSprite8(pixels, x, y, width, height, image, texX, texY, flipX, flipY);
         return;
     }
+#endif
 
+#ifdef USE_SSE
     if (width % 4 == 0) {
         blitSprite4(pixels, x, y, width, height, image, texX, texY, flipX, flipY);
         return;
     }
+#endif
 
     int32_t startX = std::max(x, 0);
     int32_t startY = std::max(y, 0);

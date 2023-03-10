@@ -9,6 +9,9 @@ endif()
 include(CTest)
 enable_testing()
 
+# Enable SSE, AVX, etc.
+add_definitions(-DUSE_SSE -DUSE_AVX)
+
 add_executable(sftrnd main.cpp)
 
 set(VCPKG_TARGET_TRIPLET x64-windows-static)
