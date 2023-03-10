@@ -38,31 +38,6 @@ inline void setPixel(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32
     pixels[i] = oldColor * !alpha + color * alpha;
 }
 
-void drawSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
-{
-    int32_t startX = std::max(x, 0);
-    int32_t startY = std::max(y, 0);
-    int32_t endX = std::min(x + width, VIEW_WIDTH);
-    int32_t endY = std::min(y + height, VIEW_HEIGHT);
-    int32_t spanX = endX - startX;
-    int32_t spanY = endY - startY;
-    int32_t texStartX = texX + flipX * width;
-    int32_t texStartY = texY + flipY * height;
-    int32_t texDirectionX = -(2 * flipX - 1);
-    int32_t texDirectionY = -(2 * flipY - 1);
-
-    for (int32_t iy = 0; iy < spanY; iy++)
-    {
-        for (int32_t ix = 0; ix < spanX; ix++)
-        {
-            auto color = getImagePixel(image,
-                                       texStartX + texDirectionX * ix,
-                                       texStartY + texDirectionY * iy);
-            setPixel(pixels, startX + ix, startY + iy, color);
-        }
-    }
-}
-
 void copySprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY)
 {
     int32_t startX = std::max(x, 0);
@@ -80,9 +55,9 @@ void copySprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
     }
 }
 
-const __m256i zero256 = _mm256_set1_epi32(0);
+const __m256i zero8 = _mm256_set1_epi32(0);
 
-void blitSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
+void blitSprite8(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
 {
     int32_t startX = std::max(x, 0);
     int32_t startY = std::max(y, 0);
@@ -119,10 +94,91 @@ void blitSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y,
             }
 
             // Non transparent pixels (alpha == 0) get filled with black:
-            auto mask = _mm256_and_epi32(dst, _mm256_cmpeq_epi32(zero256, src));
+            auto mask = _mm256_and_epi32(dst, _mm256_cmpeq_epi32(zero8, src));
             // Write the sprites actual pixels onto the masked pixels:
             auto result = _mm256_or_epi32(src, mask);
             _mm256_storeu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH], result);
+        }
+    }
+}
+
+const __m128i zero4 = _mm_set1_epi32(0);
+
+void blitSprite4(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
+{
+    int32_t startX = std::max(x, 0);
+    int32_t startY = std::max(y, 0);
+    int32_t endX = std::min(x + width, VIEW_WIDTH);
+    int32_t endY = std::min(y + height, VIEW_HEIGHT);
+    int32_t spanX = endX - startX;
+    int32_t spanY = endY - startY;
+    int32_t texStartY = texY + flipY * height;
+    int32_t texDirectionY = -(2 * flipY - 1);
+
+    auto srcPixels = reinterpret_cast<uint32_t *>(image.surface->pixels);
+
+    for (int32_t iy = 0; iy < spanY; iy++)
+    {
+        for (int32_t ix = 0; ix < spanX; ix += 4)
+        {
+            // This method follows the bit blit algorithm: https://en.wikipedia.org/wiki/Bit_blit.
+            // The idea is to AND the destination pixels with a black and white mask (black where
+            // the sprite should be opaque, white where the sprite should be transparent). Then
+            // OR the source pixels with the mask to get the correct values for each pixel.
+            // Some extra work is done by comparing the source pixel to zero in order to avoid
+            // creating a mask manually.
+
+            // Destination pixel:
+            auto dst = _mm_loadu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH]);
+            // Source pixel:
+            auto src = _mm_loadu_epi32(&srcPixels[(texX + ix) + (texStartY + texDirectionY * iy) * image.surface->w]);
+
+            if (flipX)
+            {
+                // Reverse the source:
+                src = _mm_shuffle_epi32(src, _MM_SHUFFLE(0, 1, 2, 3));
+            }
+
+            // Non transparent pixels (alpha == 0) get filled with black:
+            auto mask = _mm_and_epi32(dst, _mm_cmpeq_epi32(zero4, src));
+            // Write the sprites actual pixels onto the masked pixels:
+            auto result = _mm_or_epi32(src, mask);
+            _mm_storeu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH], result);
+        }
+    }
+}
+
+void drawSprite(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, int32_t width, int32_t height, const Image &image, int32_t texX, int32_t texY, bool flipX = false, bool flipY = false)
+{
+    if (width % 8 == 0) {
+        blitSprite8(pixels, x, y, width, height, image, texX, texY, flipX, flipY);
+        return;
+    }
+
+    if (width % 4 == 0) {
+        blitSprite4(pixels, x, y, width, height, image, texX, texY, flipX, flipY);
+        return;
+    }
+
+    int32_t startX = std::max(x, 0);
+    int32_t startY = std::max(y, 0);
+    int32_t endX = std::min(x + width, VIEW_WIDTH);
+    int32_t endY = std::min(y + height, VIEW_HEIGHT);
+    int32_t spanX = endX - startX;
+    int32_t spanY = endY - startY;
+    int32_t texStartX = texX + flipX * width;
+    int32_t texStartY = texY + flipY * height;
+    int32_t texDirectionX = -(2 * flipX - 1);
+    int32_t texDirectionY = -(2 * flipY - 1);
+
+    for (int32_t iy = 0; iy < spanY; iy++)
+    {
+        for (int32_t ix = 0; ix < spanX; ix++)
+        {
+            auto color = getImagePixel(image,
+                                       texStartX + texDirectionX * ix,
+                                       texStartY + texDirectionY * iy);
+            setPixel(pixels, startX + ix, startY + iy, color);
         }
     }
 }
@@ -145,6 +201,7 @@ void drawRect(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, i
     }
 }
 
+// TODO: Convert to class with construct/destructor for loading/freeing
 Image loadImage(const std::string &path)
 {
     auto surface = IMG_Load(path.c_str());
@@ -200,6 +257,9 @@ int main(int argc, char **argv)
     const int32_t mapWidth = VIEW_WIDTH / 16;
     const int32_t mapHeight = VIEW_HEIGHT / 16;
 
+    auto totalDelta = 0.0f;
+    auto totalFrames = 0;
+
     auto lastTime = std::chrono::high_resolution_clock::now();
     auto isRunning = true;
     while (isRunning)
@@ -222,8 +282,8 @@ int main(int argc, char **argv)
         {
             for (int32_t x = 0; x < mapWidth; x++)
             {
-                copySprite(pixels, x * 16, y * 16, 16, 16, image, 0, 0);
-                blitSprite(pixels, x * 16, y * 16, 16, 16, image, 0, 40, false, false);
+                drawSprite(pixels, x * 16, y * 16, 16, 16, image, 0, 0);
+                drawSprite(pixels, x * 16, y * 16, 16, 16, image, 0, 40);
             }
         }
 
@@ -231,10 +291,15 @@ int main(int argc, char **argv)
         auto deltaTime = static_cast<float>((currentTime - lastTime).count()) * 0.000001f;
         std::cout << deltaTime << "\n";
 
+        totalDelta += deltaTime;
+        totalFrames++;
+
         SDL_UpdateTexture(screenTexture, nullptr, reinterpret_cast<void *>(&pixels[0]), PIXEL_STRIDE);
         SDL_RenderCopy(renderer, screenTexture, nullptr, nullptr);
         SDL_RenderPresent(renderer);
     }
+
+    std::cout << "Average frametime: " << totalDelta / totalFrames << "\n";
 
     // TODO: Free images
 
