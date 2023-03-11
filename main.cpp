@@ -18,9 +18,28 @@ const int32_t PIXEL_STRIDE = VIEW_WIDTH * PIXEL_COMPONENTS;
 
 #define PIXEL_FORMAT SDL_PIXELFORMAT_ARGB8888
 
-struct Image
+class Image
 {
+public:
     SDL_Surface *surface;
+
+    Image(const std::string &path)
+    {
+        auto loadedSurface = IMG_Load(path.c_str());
+
+        if (!loadedSurface)
+        {
+            std::cout << "Failed to load image: " << path << "\n";
+        }
+
+        surface = SDL_ConvertSurfaceFormat(loadedSurface, PIXEL_FORMAT, 0);
+        SDL_FreeSurface(loadedSurface);
+    }
+
+    ~Image()
+    {
+        SDL_FreeSurface(surface);
+    }
 };
 
 inline uint32_t getImagePixel(const Image &image, int32_t x, int32_t y)
@@ -124,27 +143,15 @@ void blitSprite4(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y
     {
         for (int32_t ix = 0; ix < spanX; ix += 4)
         {
-            // This method follows the bit blit algorithm: https://en.wikipedia.org/wiki/Bit_blit.
-            // The idea is to AND the destination pixels with a black and white mask (black where
-            // the sprite should be opaque, white where the sprite should be transparent). Then
-            // OR the source pixels with the mask to get the correct values for each pixel.
-            // Some extra work is done by comparing the source pixel to zero in order to avoid
-            // creating a mask manually.
-
-            // Destination pixel:
             auto dst = _mm_loadu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH]);
-            // Source pixel:
             auto src = _mm_loadu_epi32(&srcPixels[(texX + ix) + (texStartY + texDirectionY * iy) * image.surface->w]);
 
             if (flipX)
             {
-                // Reverse the source:
                 src = _mm_shuffle_epi32(src, _MM_SHUFFLE(0, 1, 2, 3));
             }
 
-            // Non transparent pixels (alpha == 0) get filled with black:
             auto mask = _mm_and_epi32(dst, _mm_cmpeq_epi32(zero4, src));
-            // Write the sprites actual pixels onto the masked pixels:
             auto result = _mm_or_epi32(src, mask);
             _mm_storeu_epi32(&pixels[(startX + ix) + (startY + iy) * VIEW_WIDTH], result);
         }
@@ -209,22 +216,6 @@ void drawRect(std::array<uint32_t, PIXEL_COUNT> &pixels, int32_t x, int32_t y, i
     }
 }
 
-// TODO: Convert to class with construct/destructor for loading/freeing
-Image loadImage(const std::string &path)
-{
-    auto surface = IMG_Load(path.c_str());
-
-    if (!surface)
-    {
-        std::cout << "Failed to load image: " << path << "\n";
-    }
-
-    auto formattedSurface = SDL_ConvertSurfaceFormat(surface, PIXEL_FORMAT, 0);
-    SDL_FreeSurface(surface);
-
-    return Image{formattedSurface};
-}
-
 int main(int argc, char **argv)
 {
 
@@ -260,7 +251,7 @@ int main(int argc, char **argv)
     static std::array<uint32_t, PIXEL_COUNT> pixels;
     pixels.fill(0xffffffff);
 
-    Image image = loadImage("tiles.png");
+    Image image("tiles.png");
 
     const int32_t mapWidth = VIEW_WIDTH / 16;
     const int32_t mapHeight = VIEW_HEIGHT / 16;
@@ -281,7 +272,19 @@ int main(int argc, char **argv)
         while (SDL_PollEvent(&event))
         {
             if (event.type == SDL_QUIT)
+            {
                 isRunning = false;
+            }
+
+            if (event.type == SDL_KEYDOWN)
+            {
+
+            }
+
+            if (event.type == SDL_KEYUP)
+            {
+
+            }
         }
 
         lastTime = std::chrono::high_resolution_clock::now();
@@ -308,8 +311,6 @@ int main(int argc, char **argv)
     }
 
     std::cout << "Average frametime: " << totalDelta / totalFrames << "\n";
-
-    // TODO: Free images
 
     return 0;
 }
